@@ -25,7 +25,7 @@
 
 import { stepSwing, swingAmplitude, makeSwing } from './swing.js';
 import {
-  PLAYER_X, BULLET_LETHAL_FIRST_X, BULLET_LETHAL_LAST_X, BULLET_HALF,
+  BULLET_LETHAL_FIRST_X, BULLET_LETHAL_LAST_X, BULLET_HALF,
   DIVER_LETHAL_FIRST_X, DIVER_LETHAL_LAST_X, DIVER_HALF,
   BULLET_FALL_PER_FRAME, DIVE_HANDOFF_X, DIVE_HANDOFF_X_AGGRESSIVE,
   STAGE_ATTACKING, STAGE_NEAR_BOTTOM, STAGE_AGGRESSIVE,
@@ -161,7 +161,7 @@ export function predictBullet(b, timing, horizon, out) {
  * @param {number} d.slot @param {number} d.stage @param {number} d.x
  * @param {number} d.pivot @param {number} d.pivotAdd @param {number} d.speed
  * @param {number} d.swingL @param {number} d.swingD @param {number} d.swingE
- * @param {number} d.sorties
+ * @param {number} d.sorties @param {number} d.counter TEMP_COUNTER_1
  * @param {number} timing TIMING_VARIABLE as read this frame
  * @param {number} playerY
  * @param {number} horizon
@@ -186,9 +186,16 @@ export function predictDiver(d, timing, playerY, horizon, out) {
   if (hi < Y_MIN || lo > Y_MAX) return false;
 
   const iterations = (d.speed & 3) + 1;
-  const handoff = stage === STAGE_AGGRESSIVE ? DIVE_HANDOFF_X_AGGRESSIVE : DIVE_HANDOFF_X;
-  // A state-9 alien past its fourth sortie drags its pivot toward the ship.
-  const hugs = stage === STAGE_AGGRESSIVE && d.sorties >= 4;
+  let handoff = stage === STAGE_AGGRESSIVE ? DIVE_HANDOFF_X_AGGRESSIVE : DIVE_HANDOFF_X;
+  // Past its fourth sortie a state-9 alien drags its pivot toward the ship --
+  // but at *exactly* four it only does so on alternate frames, so treating it
+  // as every frame doubles the predicted closing rate.
+  const hugAlways = stage === STAGE_AGGRESSIVE && d.sorties > 4;
+  const hugAlternate = stage === STAGE_AGGRESSIVE && d.sorties === 4;
+  // State 9 is on a timer: when TEMP_COUNTER_1 runs out the alien gives up and
+  // turns back, so predicting a dive past that point invents a threat that
+  // never arrives -- and then dodges something imaginary.
+  let counter = stage === STAGE_AGGRESSIVE ? d.counter : -1;
 
   let x = d.x;
   let pivot = d.pivot;
@@ -198,11 +205,19 @@ export function predictDiver(d, timing, playerY, horizon, out) {
   for (let f = 1; f <= horizon; f += 1) {
     if (stage === STAGE_ATTACKING || stage === STAGE_AGGRESSIVE) {
       x = (x + 1) & 0xff;
-      if (hugs) pivot = (pivot + Math.sign(playerY - pivot)) & 0xff;
+      const hugs = hugAlways || (hugAlternate && (((timing - f) & 1) !== 0));
+      // The ROM's tie-break is `playerY >= pivot ? +1 : -1`; Math.sign would
+      // stall at zero and slowly drift away from the real path.
+      if (hugs) pivot = (pivot + (playerY >= pivot ? 1 : -1)) & 0xff;
       stepSwing(swing, iterations);
       const y = (pivot + swing.h) & 0xff;
       if (offScreenHorizontally(y)) break;
-      if (x >= handoff) stage = STAGE_NEAR_BOTTOM;
+      if (x >= handoff) {
+        stage = STAGE_NEAR_BOTTOM;
+      } else if (counter > 0) {
+        counter -= 1;
+        if (counter === 0) break;    // gives up and goes round again
+      }
       if (x >= DIVER_LETHAL_FIRST_X && x <= DIVER_LETHAL_LAST_X) {
         if (first < 0) first = f;
         last = f;
@@ -233,13 +248,65 @@ export function predictDiver(d, timing, playerY, horizon, out) {
   out.first = first;
   out.last = last;
   out.half = DIVER_HALF;
-  out.halfGrow = hugs ? HUG_GROWTH : 0;
+  out.halfGrow = (hugAlways || hugAlternate) ? HUG_GROWTH : 0;
   summarise(out);
   return true;
 }
 
+/**
+ * Where a diver will be in `frame` frames, and how far down the screen.
+ *
+ * {@link predictDiver} only records the frames in which an alien is level with
+ * the ship, which is the wrong window for aiming: a shot has to be fired while
+ * the alien is still high up. This runs the same motion for an arbitrary frame
+ * so the shot chooser can lead its target instead of firing at where the alien
+ * used to be.
+ *
+ * @param {object} d the same sample {@link predictDiver} takes
+ * @param {number} timing @param {number} playerY @param {number} frame
+ * @returns {{x: number, y: number} | null} null if it stops being predictable
+ */
+export function diverStateAt(d, timing, playerY, frame) {
+  let stage = d.stage;
+  if (stage !== STAGE_ATTACKING && stage !== STAGE_NEAR_BOTTOM && stage !== STAGE_AGGRESSIVE) {
+    return null;
+  }
+  const swing = makeSwing(d.pivotAdd, d.swingL, d.swingD, d.swingE);
+  const iterations = (d.speed & 3) + 1;
+  const handoff = stage === STAGE_AGGRESSIVE ? DIVE_HANDOFF_X_AGGRESSIVE : DIVE_HANDOFF_X;
+  const hugAlways = stage === STAGE_AGGRESSIVE && d.sorties > 4;
+  const hugAlternate = stage === STAGE_AGGRESSIVE && d.sorties === 4;
+  let counter = stage === STAGE_AGGRESSIVE ? d.counter : -1;
+  let x = d.x;
+  let pivot = d.pivot;
+  let y = d.y;
+
+  for (let f = 1; f <= frame; f += 1) {
+    if (stage === STAGE_ATTACKING || stage === STAGE_AGGRESSIVE) {
+      x = (x + 1) & 0xff;
+      const hugs = hugAlways || (hugAlternate && (((timing - f) & 1) !== 0));
+      if (hugs) pivot = (pivot + (playerY >= pivot ? 1 : -1)) & 0xff;
+      stepSwing(swing, iterations);
+      y = (pivot + swing.h) & 0xff;
+      if (offScreenHorizontally(y)) return null;
+      if (x >= handoff) {
+        stage = STAGE_NEAR_BOTTOM;
+      } else if (counter > 0) {
+        counter -= 1;
+        if (counter === 0) return null;
+      }
+    } else {
+      x = (x + (((timing - f) & 1) + 1)) & 0xff;
+      if (((x - 6) & 0xff) < 3) return null;
+      stepSwing(swing, iterations);
+      const sum = swing.h + pivot;
+      const carry = sum > 0xff;
+      if ((swing.h & 0x80) ? !carry : carry) return null;
+      y = sum & 0xff;
+    }
+  }
+  return { x, y };
+}
+
 /** The cap on a pursuing threat's widening band. */
 export const HUG_CAP = HUG_GROWTH_CAP;
-
-/** Where the ship is, for callers that want the lethal row. */
-export const SHIP_X = PLAYER_X;

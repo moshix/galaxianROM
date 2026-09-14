@@ -1,18 +1,18 @@
 /**
  * Bootstrap: owns the canvas, the frame clock and input routing.
- * Copyright 2026 y moshix
+ *
  * The clock is deliberately not "one frame per requestAnimationFrame". The
- * original runs at 60.606 Hz (18.432 MHz / (1152 * 264)), which no isplay
- * matches exactly, so we acumulate real elapsed time and run as many
- * whole game frames are necessary. Game logic therefore always advances in discrete
- * 1/60.606 s steps, the same steps the Z80 on NAMCO Galaxian takes
- * regardless of wha the monitor is doing.
+ * original runs at 60.606 Hz (18.432 MHz / (1152 * 264)), which no display
+ * matches exactly, so we accumulate real elapsed time and run however many
+ * whole game frames are due. Game logic therefore always advances in discrete
+ * 1/60.606 s steps -- the same steps the Z80 oracle takes -- regardless of what
+ * the monitor is doing.
  */
 
 import { Machine, GAME_WIDTH, GAME_HEIGHT, FRAME_RATE } from './machine/machine.js';
 import { Renderer } from './video/renderer.js';
 import { coldStart, nmi } from './game/script.js';
- import { VAR } from './machine/addresses.js';
+import { VAR } from './machine/addresses.js';
 import { AutoPlayer } from './ai/autoplay.js';
 import { InputMux } from './input/mux.js';
 import { GamepadInput } from './input/gamepad.js';
@@ -35,30 +35,27 @@ const KEY_MAP = /** @type {const} */ ({
   ArrowRight: 'right',
   Space: 'fire',
   Digit5: 'coin1',
-   Digit6: 'coin2', /** one more coin insrted??? */ 
+  Digit6: 'coin2',
   Digit1: 'start1',
   Digit2: 'start2',
 });
 
 export class Game {
   /** @param {HTMLCanvasElement} canvas */
-
-  /** moshix remove old code o.3 here */  
-  
   constructor(canvas) {
     this.canvas = canvas;
     const ctx = canvas.getContext('2d', { alpha: false });
     if (ctx === null) throw new Error('2d canvas context unavailable');
     this.ctx = ctx;
     this.ctx.imageSmoothingEnabled = false;
-    /** instantiate new machine below */
-      this.machine = new Machine();
+
+    this.machine = new Machine();
     this.machine.refreshCoinageBits();
-    this.renderer = new Renderer();   /** and the rendrer */
+    this.renderer = new Renderer();
 
-    // The renerer draws into a Uint32Array; wrap the same buffer in the
-      // Uint8ClampedArray that ImageData wants, so presenting a frame copies nottin
-
+    // The renderer draws into a Uint32Array; wrap the same buffer in the
+    // Uint8ClampedArray that ImageData wants, so presenting a frame copies
+    // nothing.
     this.frame = new ImageData(
       new Uint8ClampedArray(this.renderer.pixels.buffer), GAME_WIDTH, GAME_HEIGHT,
     );
@@ -73,10 +70,10 @@ export class Game {
     this.aiEnabled = false;
     this.zoom = 2;
 
-      this.ai = new AutoPlayer(this.machine);
+    this.ai = new AutoPlayer(this.machine);
     /**
-     Keyboard and gamepad both close the same switches, so they go through a
-    mux instead of writing the ports directly. Moshix go check out src/input/mux.js
+     * Keyboard and gamepad both close the same switches, so they go through a
+     * mux rather than writing the ports directly. @see src/input/mux.js
      */
     this.mux = new InputMux((name, down) => this.machine.setInput(name, down));
     this.gamepad = new GamepadInput();
@@ -88,22 +85,23 @@ export class Game {
   start() {
     if (this.running) return;
     this.running = true;
-     this.lastTime = null; /** take precise time */
+    this.lastTime = null;
     requestAnimationFrame(this.tick);
   }
 
   stop() { this.running = false; }
 
-  /** @param {number} now milliseconds snce  requestAnimationFrame */
+  /** @param {number} now milliseconds from requestAnimationFrame */
   tick = (now) => {
-     if (!this.running) return;
+    if (!this.running) return;
     if (this.lastTime === null) this.lastTime = now;
     this.accumulator += now - this.lastTime;
-       this.lastTime = now;
+    this.lastTime = now;
 
     let due = Math.floor(this.accumulator / FRAME_MS);
     if (due > MAX_CATCHUP_FRAMES) {
-             // if  tab was hidden or the machine stalled. Drop the backlog 
+      // The tab was hidden or the machine stalled. Drop the backlog rather than
+      // fast-forwarding through it, which would look like the game skipping.
       this.accumulator = 0;
       due = 1;
     } else {
@@ -119,17 +117,17 @@ export class Game {
   /** Advance the simulation by exactly one 1/60.606 s frame. */
   stepFrame() {
     this.frameCount += 1;
-    // The AI drives the same three switches a human does, so it has to decide 
-      // before the machine reads i inputs.
+    // The AI drives the same three switches a human does, so it has to decide
+    // before the machine samples its inputs.
     if (this.aiEnabled) this.ai.step();
     // Only one of the two drives the controls. The AI clears the switches it
-    // owns every frame (autoplay.js), so letting a joystick write the at the
-    // same time would just be a fight the AI always wins, not fair....
+    // owns every frame (autoplay.js), so letting a joystick write them at the
+    // same time would just be a fight the AI always wins.
     else this.mux.setAll('gamepad', this.gamepad.poll());
     // One vblank interrupt: the whole game, including the back buffer blit that
     // makes the display lag the simulation by a frame.
     nmi(this.machine);
-        this.renderer.stepStars(this.machine.hFlip);
+    this.renderer.stepStars(this.machine.hFlip);
     this.sound.update(this.machine);
   }
 
@@ -137,20 +135,16 @@ export class Game {
   setAi(on) {
     this.aiEnabled = on;
     // Hand the controls back cleanly, or the last AI input stays held.
-
     this.ai.release();
     // The AI has been writing the ports behind the mux's back. Re-assert
     // whatever the player is still physically holding, or a direction they
     // never let go of stays open and the ship sits still.
-    
     this.mux.clearSource('gamepad');
-     this.mux.invalidate();
+    this.mux.invalidate();
     const hint = document.getElementById('hint');
     if (hint !== null) hint.style.opacity = on ? '0.9' : '0.55';
   }
 
-
-  // here we render 
   render() {
     this.renderer.render(this.machine.charRam, this.machine.objRam, {
       stars: this.machine.starsEnabled,
@@ -169,10 +163,10 @@ export class Game {
     const m = this.machine;
     return {
       frame: this.frameCount,
-        script: m.peek(VAR.SCRIPT_NUMBER),
+      script: m.peek(VAR.SCRIPT_NUMBER),
       stage: m.peek(VAR.SCRIPT_STAGE),
-      credits: m.peek(VAR.NUM_CREDITS),  // need also credits....
-        lives: m.peek(VAR.PLAYER_LIVES),
+      credits: m.peek(VAR.NUM_CREDITS),
+      lives: m.peek(VAR.PLAYER_LIVES),
       level: m.peek(VAR.PLAYER_LEVEL) + 1,
     };
   }
@@ -230,8 +224,9 @@ function attachInput(game) {
     // Open only the switches the keyboard is not also holding.
     game.mux.clearSource('gamepad');
   });
-           // A stick can be knocked, or unplugged and replaced, while the tab is in the
-  // background; re-reading its centre on the way back stops it coming back   stuck hard over.
+  // A stick can be knocked, or unplugged and replaced, while the tab is in the
+  // background; re-reading its centre on the way back stops it coming back
+  // stuck hard over.
   window.addEventListener('focus', () => {
     game.gamepad.enabled = true;
     game.gamepad.recalibrate();
@@ -239,15 +234,26 @@ function attachInput(game) {
   window.addEventListener('blur', () => {
     game.gamepad.enabled = false;
     // The ports are cleared wholesale rather than switch by switch, so tell the
-        // mux to forget what it thinks is closed -- otherwise the next press looks
+    // mux to forget what it thinks is closed -- otherwise the next press looks
     // like a repeat of one already applied and never reaches the machine.
     game.mux.reset();
     game.machine.port6000 = 0;
-      game.machine.port6800 = 0;
+    game.machine.port6800 = 0;
     game.machine.refreshCoinageBits();
   });
 }
 
+/**
+ * Read the optional warm-up parameters from the URL.
+ *
+ * `?frames=N` steps N frames synchronously before the animation loop starts,
+ * and `?coin=1&start=1` feeds a credit and a start press on the way. This
+ * exists so a headless browser can reach a known screen deterministically --
+ * requestAnimationFrame does not tick reliably without a compositor, so a
+ * screenshot of a freshly loaded page is otherwise just black.
+ *
+ * @param {Game} game
+ */
 function applyUrlWarmup(game) {
   const params = new URLSearchParams(location.search);
   const frames = Number.parseInt(params.get('frames') ?? '', 10);
@@ -268,6 +274,7 @@ function applyUrlWarmup(game) {
   game.render();
 }
 
+/** Stamp the version into the corner of the page. @see {@link VERSION} */
 function showVersion() {
   const el = document.getElementById('version');
   if (el !== null) el.textContent = `version ${VERSION} \u00b7 code by Moshix`;

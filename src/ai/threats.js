@@ -41,10 +41,12 @@ export class ThreatReader {
     for (let i = 0; i < FLYING_SLOTS; i += 1) {
       this.divers.push({
         slot: 0, stage: 0, x: 0, y: 0, pivot: 0, pivotAdd: 0, speed: 0,
-        swingL: 0, swingD: 0, swingE: 0, sorties: 0, index: 0,
+        swingL: 0, swingD: 0, swingE: 0, sorties: 0, index: 0, counter: 0,
       });
     }
     this.diverCount = 0;
+    /** Reused scratch for one bullet sample, so the hot path allocates nothing. */
+    this.bullet = { slot: 0, x: 0, yLo: 0, yHi: 0, delta: 0 };
     this.count = 0;
     /** @type {World} */
     this.world = {
@@ -103,6 +105,9 @@ export class ThreatReader {
       d.swingE = m.peek(addr + SWING.VELOCITY_FRACTION);
       d.sorties = m.peek(addr + INFLIGHT_ALIEN.SORTIE_COUNT);
       d.index = m.peek(addr + INFLIGHT_ALIEN.INDEX_IN_SWARM);
+      // State 9 gives up and turns back when this runs out, so a predictor that
+      // ignores it invents dives that never happen.
+      d.counter = m.peek(addr + INFLIGHT_ALIEN.TEMP_COUNTER_1);
       n += 1;
     }
     this.diverCount = n;
@@ -122,14 +127,13 @@ export class ThreatReader {
     for (let i = 0; i < ENEMY_BULLET.COUNT && n < MAX_THREATS; i += 1) {
       const addr = BLOCK.ENEMY_BULLETS.addr + i * ENEMY_BULLET.SIZE;
       if ((m.peek(addr + ENEMY_BULLET.IS_ACTIVE) & 1) === 0) continue;
-      const sample = {
-        slot: i,
-        x: m.peek(addr + ENEMY_BULLET.X),
-        yLo: m.peek(addr + ENEMY_BULLET.Y_LO),
-        yHi: m.peek(addr + ENEMY_BULLET.Y_HI),
-        delta: int8(m.peek(addr + ENEMY_BULLET.Y_DELTA)),
-      };
-      if (predictBullet(sample, w.timing, HORIZON_FRAMES, this.windows[n])) n += 1;
+      const b = this.bullet;
+      b.slot = i;
+      b.x = m.peek(addr + ENEMY_BULLET.X);
+      b.yLo = m.peek(addr + ENEMY_BULLET.Y_LO);
+      b.yHi = m.peek(addr + ENEMY_BULLET.Y_HI);
+      b.delta = int8(m.peek(addr + ENEMY_BULLET.Y_DELTA));
+      if (predictBullet(b, w.timing, HORIZON_FRAMES, this.windows[n])) n += 1;
     }
 
     for (let i = 0; i < this.diverCount && n < MAX_THREATS; i += 1) {

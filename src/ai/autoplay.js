@@ -27,17 +27,17 @@
  * @see reference/galaxian.asm:69-85
  */
 
-import { VAR, INFLIGHT_ALIEN } from '../machine/addresses.js';
 import { ThreatReader } from './threats.js';
 import { chooseMove } from './evade.js';
+import { diverStateAt } from './paths.js';
 import {
-  Y_MIN, Y_MAX, ARRIVED_TOLERANCE, BULLET_SPAWN_X, PLAYER_BULLET_RISE,
-  SHOT_AIM_DY_LOW, SHOT_AIM_DY_HIGH, DIVER_HALF,
+  Y_MIN, Y_MAX, BULLET_SPAWN_X, PLAYER_BULLET_RISE,
+  SHOT_AIM_DY_LOW, SHOT_AIM_DY_HIGH,
   SCROLL_FRAMES_PER_PIXEL, CELL_Y_BIAS, ROW_BASE_X, ROW_PITCH_X,
   STAGE_ATTACKING, STAGE_AGGRESSIVE,
 } from './constants.js';
 import { ROW_MIN, ROW_MAX, COL_MIN, COL_MAX } from '../game/swarm.js';
-import { BLOCK } from '../machine/addresses.js';
+import { VAR, BLOCK } from '../machine/addresses.js';
 
 /** Frames a diver's trigger must be away before we stop worrying about it. */
 const SHOOT_RISK_HORIZON = 24;
@@ -133,14 +133,18 @@ export class AutoPlayer {
   /**
    * Push the ship one pixel towards `target`.
    *
-   * At most one switch: setting both cancels exactly, and the deadband stops a
-   * one-pixel target being chased forever.
+   * At most one switch: setting both cancels exactly on the hardware.
    * @param {number} playerY @param {number} target
    * @returns {number} where the ship will be after this frame's move
    */
   moveToward(playerY, target) {
+    // No deadband. `shipPositionAt` assumes a target one pixel away is reached
+    // next frame, so refusing to make that move would leave the planner and the
+    // ship permanently disagreeing -- and a one-pixel target is the commonest
+    // case by far. There is no oscillation to guard against: the candidate set
+    // includes standing still, so "stay" is chosen explicitly when it is best.
     const delta = target - playerY;
-    if (Math.abs(delta) <= ARRIVED_TOLERANCE) { this.lastDirection = 0; return playerY; }
+    if (delta === 0) { this.lastDirection = 0; return playerY; }
     if (delta > 0) {
       this.m.setInput('left', true);
       this.lastDirection = 1;
@@ -197,40 +201,31 @@ export class AutoPlayer {
       const d = this.reader.divers[i];
       if (d.stage !== STAGE_ATTACKING && d.stage !== STAGE_AGGRESSIVE) continue;
 
-      const firstFrame = Math.ceil((BULLET_SPAWN_X - 2 - d.x) / (PLAYER_BULLET_RISE + 1));
-      const lastFrame = Math.floor((BULLET_SPAWN_X + 3 - d.x) / (PLAYER_BULLET_RISE + 1));
+      // handlePlayerShoot runs *after* handlePlayerBullet, so the shot is still
+      // parked at its muzzle on the frame it is fired and has only travelled
+      // 4*(f-1) by frame f. Getting that one frame wrong shifts the whole
+      // intercept window by most of a pixel of closing speed.
+      const closing = PLAYER_BULLET_RISE + 1;
+      const firstFrame = Math.ceil((BULLET_SPAWN_X + PLAYER_BULLET_RISE - 2 - d.x) / closing);
+      const lastFrame = Math.floor((BULLET_SPAWN_X + PLAYER_BULLET_RISE + 3 - d.x) / closing);
       let hits = false;
       for (let f = Math.max(1, firstFrame); f <= lastFrame && !hits; f += 1) {
-        // The alien's Y f frames out; the swing makes this predictable, and the
-        // threat reader has already done the work for anything that reaches us.
-        const dy = this.predictedDiverY(i, f) - firedY;
+        const at = diverStateAt(d, this.reader.world.timing, firedY, f);
+        if (at === null) break;          // it turns back or leaves; do not shoot
+        const dy = at.y - firedY;
         if (dy >= SHOT_AIM_DY_LOW && dy <= SHOT_AIM_DY_HIGH) hits = true;
       }
       if (!hits) continue;
 
       // A flagship is worth far more than its points: killing a diving one
       // stops every alien firing until the sky clears.
-      const score = (d.index >= 0x70 ? 1000 : 0) + (255 - d.x);
+      // Nearest first among equals: the shortest flight is the least time for
+      // the alien to swing out of the way. A flagship outranks all of it,
+      // because killing a diving one silences every gun until the sky clears.
+      const score = (d.index >= 0x70 ? 1000 : 0) + d.x;
       if (score > bestScore) { bestScore = score; best = d.slot; }
     }
     return best;
-  }
-
-  /**
-   * Where diver `i` will be `f` frames from now, reusing the threat window when
-   * one was built and falling back to its current Y otherwise.
-   * @param {number} i @param {number} f
-   * @returns {number}
-   */
-  predictedDiverY(i, f) {
-    const slot = this.reader.divers[i].slot;
-    for (let t = 0; t < this.reader.count; t += 1) {
-      const w = this.reader.windows[t];
-      if (w.kind === 1 && w.slot === slot && f >= w.first && f <= w.last) {
-        return w.track[f - w.first];
-      }
-    }
-    return this.reader.divers[i].y;
   }
 
   /**
@@ -274,7 +269,12 @@ export class AutoPlayer {
       if (row < 0) continue;
 
       // Flight time to this row's band, then the formation's travel over it.
-      const rowX = (ROW_BASE_X - ROW_PITCH_X * (ROW_MAX - row)) & 0xff;
+      // `x = 0x7c - row*12`, exactly as setInflightAlienStartPosition computes
+      // it: row 7 (flagships) is at X 40 and row 2 at X 100. Mirroring this --
+      // which is easy, because 0x7c looks like the flagship row and is not --
+      // puts the lead out by up to 5 px and silently declines nearly every
+      // shot the AI could have taken.
+      const rowX = (ROW_BASE_X - ROW_PITCH_X * row) & 0xff;
       const frames = Math.max(0, (BULLET_SPAWN_X - rowX) / PLAYER_BULLET_RISE);
       const lead = direction * Math.floor(frames / SCROLL_FRAMES_PER_PIXEL);
       const y = (scroll + lead + col * 16 + CELL_Y_BIAS) & 0xff;
@@ -313,7 +313,11 @@ export class AutoPlayer {
             break;
           }
         }
-        if (frames >= 0) risky.push(this.predictedDiverY(i, Math.max(1, frames)));
+        if (frames >= 0) {
+          const at = diverStateAt(d, this.reader.world.timing, this.reader.world.playerY,
+            Math.max(1, frames));
+          if (at !== null) risky.push(at.y);
+        }
       }
     }
     if (risky.length === 0) return () => 0;
@@ -325,5 +329,4 @@ export class AutoPlayer {
   }
 }
 
-export { DIVER_HALF };
 export default AutoPlayer;
