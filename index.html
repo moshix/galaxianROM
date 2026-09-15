@@ -1,4 +1,5 @@
 <!doctype html>
+<!-- Copyright 2026 by Moshix -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -24,6 +25,45 @@
     display: block;
   }
   #hint { opacity: .55; letter-spacing: .04em; text-align: center; }
+  /* Pausing freezes the simulation but leaves the canvas painted, so the page
+     needs to say so or a still screen looks like a crash. */
+  #hint.paused { opacity: 1; color: #ffb86b; }
+  #hint.paused::after { content: " — PAUSED"; font-weight: 700; }
+
+  /*
+   * The AI indicator. Whether the game is playing itself is not obvious from
+   * the screen -- a competent AI looks exactly like a competent player -- so
+   * the control that turns it on lights up while it is running.
+   *
+   * The glow is drawn with box-shadow rather than an outline so it reads as a
+   * halo with soft edges, and the element keeps its padding and border in both
+   * states so switching modes does not shift the rest of the line sideways.
+   */
+  #ai-hint {
+    padding: 1px 6px;
+    border-radius: 4px;
+    border: 1px solid transparent;
+    transition: color .18s, background-color .18s, box-shadow .18s, border-color .18s;
+  }
+  #ai-hint.on {
+    color: #bfe2ff;
+    border-color: rgba(124, 196, 255, .55);
+    background: rgba(124, 196, 255, .10);
+    box-shadow: 0 0 6px rgba(124, 196, 255, .55), 0 0 18px rgba(124, 196, 255, .30);
+    text-shadow: 0 0 8px rgba(124, 196, 255, .8);
+    animation: ai-pulse 1.9s ease-in-out infinite;
+  }
+  #ai-hint.on kbd { border-color: rgba(124, 196, 255, .6); color: #dff0ff; }
+  @keyframes ai-pulse {
+    0%, 100% { box-shadow: 0 0 6px rgba(124,196,255,.45), 0 0 16px rgba(124,196,255,.22); }
+    50%      { box-shadow: 0 0 9px rgba(124,196,255,.75), 0 0 26px rgba(124,196,255,.45); }
+  }
+  /* A pulsing glow is exactly the sort of thing that should hold still for
+     anyone who has asked their system to stop animating. */
+  @media (prefers-reduced-motion: reduce) {
+    #ai-hint.on { animation: none; }
+    #ai-hint { transition: none; }
+  }
   /*
    * Fixed to the corner of the viewport rather than placed in the body grid, so
    * it never shifts the canvas as the zoom changes. `pointer-events: none`
@@ -59,6 +99,8 @@
   #remap td { padding: 3px 10px 3px 0; }
   #remap td.bind { color: #8fd18f; min-width: 90px; }
   #remap td.bind.unbound { color: #7a7a7a; }
+  /* An aside in a control's label, for the one action the board never had. */
+  #remap td .note { opacity: .55; }
   #remap button {
     background: #1b1b1b; border: 1px solid #333; border-radius: 3px;
     color: inherit; font: inherit; padding: 1px 8px; cursor: pointer;
@@ -96,6 +138,7 @@
       'audio/sound.js',
       'game/aliendraw.js',
       'game/attack.js',
+      'game/attract-ai.js',
       'game/bullets.js',
       'game/collision.js',
       'game/commands.js',
@@ -140,7 +183,9 @@
   <div id="hint">
     <kbd>&larr;</kbd> <kbd>&rarr;</kbd> move &nbsp;·&nbsp; <kbd>space</kbd> fire &nbsp;·&nbsp;
     <kbd>5</kbd> coin &nbsp;·&nbsp; <kbd>1</kbd> start &nbsp;·&nbsp;
-    <kbd>A</kbd> self-playing AI &nbsp;·&nbsp; <kbd>M</kbd> sound &nbsp;·&nbsp;
+    <span id="ai-hint"><kbd>A</kbd> self-playing AI</span> &nbsp;·&nbsp;
+    <kbd>P</kbd> pause &nbsp;·&nbsp;
+    <kbd>M</kbd> sound &nbsp;·&nbsp;
     <kbd>+</kbd>/<kbd>-</kbd> zoom &nbsp;·&nbsp;
     <kbd>G</kbd> <button type="button" class="link" id="openremap">joystick</button>
   </div>
@@ -162,6 +207,30 @@
         </tr>
         <tr data-action="fire">
           <td>fire</td><td class="bind" data-bind>—</td>
+          <td><button type="button" data-set>set</button>
+              <button type="button" data-clear>clear</button></td>
+        </tr>
+        <!--
+          Every action in ACTIONS needs a row here. RemapUI builds itself from
+          these `data-action` attributes, so an action without one cannot be
+          rebound or cleared -- and the shipped defaults are guesses about
+          hardware we have never seen. A six-button stick that numbers its
+          buttons 0-5 puts a punch on pause's default; without a row the player
+          would have no way to take it back.
+        -->
+        <tr data-action="coin">
+          <td>insert coin</td><td class="bind" data-bind>—</td>
+          <td><button type="button" data-set>set</button>
+              <button type="button" data-clear>clear</button></td>
+        </tr>
+        <tr data-action="start">
+          <td>1 player start</td><td class="bind" data-bind>—</td>
+          <td><button type="button" data-set>set</button>
+              <button type="button" data-clear>clear</button></td>
+        </tr>
+        <tr data-action="pause">
+          <td>pause <span class="note">(not on the real board)</span></td>
+          <td class="bind" data-bind>—</td>
           <td><button type="button" data-set>set</button>
               <button type="button" data-clear>clear</button></td>
         </tr>
