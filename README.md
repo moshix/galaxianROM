@@ -5,6 +5,20 @@ written in plain ES modules with no build step and no dependencies. It is not an
 executes when you play it. Every routine of the 1979 program has been reimplemented
 in JavaScript.
 
+
+The ga,e  keeps the original memory map (ram, charRam,
+objRam as Uint8Arrays at the 1979 addresses). No Alien class, no Player object.
+  
+That's precisely what makes the comparison a byte diff rather than a hand-written state
+mapping — and a hand-written mapping is exactly where bugs would hide.
+
+This galaxian uses a cycle-accurate Z80 + Galaxian board running the original 1979 machine code,
+and the JS port, steps them together frame by frame with identical inputs, and diffs $4000–$43BF
+— every game variable. 1200 frames of scripted play, plus a ~1950-frame attract sequence compared on RAM,
+char RAM and OBJRAM.
+
+ An emulator needs the ROM you can't legally distribute. We use the annotated assembly by Steve Tunstall. 
+
 What makes that claim checkable is the thing this repository is really about:
 
 > A Z80 emulator runs the **original 1979 machine code** next to the JavaScript port,
